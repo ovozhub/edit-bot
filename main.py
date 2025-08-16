@@ -1,174 +1,245 @@
-import logging import asyncio import os import json from pathlib import Path from aiohttp import web
+import logging
+import asyncio
+import os
+import json
+from pathlib import Path
+from aiohttp import web
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters, ContextTypes from telethon import TelegramClient, errors from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ConversationHandler, MessageHandler, filters, ContextTypes
+from telethon import TelegramClient, errors
+from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
 
-📂 sessions va progress fayllari
+# 📂 sessions va progress fayllari
+Path("sessions").mkdir(exist_ok=True)
+progress_file = Path("progress.json")
 
-Path("sessions").mkdir(exist_ok=True) progress_file = "progress.json"
+# --- TELEGRAM API ma’lumotlari ---
+api_id = 25351311
+api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
+bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"
 
-——— TELEGRAM API ma’lumotlari ———
-
-api_id = 25351311 api_hash = "7b854af9996797aa9ca67b42f1cd5cbe" bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"
-
-🔑 Kirish paroli
-
+# 🔑 Kirish paroli
 ACCESS_PASSWORD = "dnx"
 
-🎯 Avtomatik qo‘shiladigan bot
-
+# 🎯 Avtomatik qo‘shiladigan bot
 TARGET_BOT = "@oxang_bot"
 
-——— LOGGER ———
+# --- LOGGER ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(level=logging.INFO) logger = logging.getLogger(name)
-
-——— Holatlar ———
-
+# --- Holatlar ---
 ASK_PASSWORD, SELECT_MODE, PHONE, CODE, PASSWORD, GROUP_RANGE = range(6)
 
-——— Session va avtorizatsiya boshqaruvlari ———
+# --- Session va avtorizatsiya boshqaruvlari ---
+sessions = {}
+authorized_users = set()
 
-sessions = {} authorized_users = set()
+# --- Progress yuklash/saqlash ---
+def load_progress():
+    if progress_file.exists():
+        return json.loads(progress_file.read_text())
+    return {}
 
-📊 Progress saqlash/ochish
+def save_progress(data):
+    progress_file.write_text(json.dumps(data))
 
-def load_progress(): if os.path.exists(progress_file): with open(progress_file, "r") as f: return json.load(f) return {}
+progress = load_progress()  # user_id -> oxirgi ochilgan raqam
 
-def save_progress(data): with open(progress_file, "w") as f: json.dump(data, f)
+# --- START ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id in authorized_users:
+        return await show_menu(update)
+    await update.message.reply_text("🔒 Kirish parolini kiriting:")
+    return ASK_PASSWORD
 
-progress = load_progress()
+# --- Parol tekshirish ---
+async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text.strip() != ACCESS_PASSWORD:
+        await update.message.reply_text("❌ Noto‘g‘ri parol.")
+        return ConversationHandler.END
+    authorized_users.add(update.effective_user.id)
+    return await show_menu(update)
 
-——— START ———
+# --- Menyu chiqarish ---
+async def show_menu(update: Update):
+    keyboard = [[InlineKeyboardButton("Guruh ochish", callback_data='create_group')]]
+    target = update.message or update.callback_query.message
+    await target.reply_text("⚙️ Rejimni tanlang:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_MODE
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): if update.effective_user.id in authorized_users: return await show_menu(update) await update.message.reply_text("🔒 Kirish parolini kiriting:") return ASK_PASSWORD
+# --- Rejim tanlash ---
+async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['mode'] = query.data
+    keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("📱 Telefon raqamni yuborish", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await query.message.reply_text("📞 Telefon raqamingizni yuboring:", reply_markup=keyboard)
+    return PHONE
 
-——— Parol tekshirish ———
+# --- Telefon qabul qilish ---
+async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.contact.phone_number if update.message.contact else update.message.text.strip()
+    if not phone.startswith('+') or not phone[1:].isdigit():
+        await update.message.reply_text("Telefon raqam + bilan boshlanishi kerak.")
+        return PHONE
 
-async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE): if update.message.text.strip() != ACCESS_PASSWORD: await update.message.reply_text("❌ Noto‘g‘ri parol.") return ConversationHandler.END authorized_users.add(update.effective_user.id) return await show_menu(update)
+    context.user_data['phone'] = phone
+    client = TelegramClient(f"sessions/{phone}", api_id, api_hash)
+    sessions[update.effective_user.id] = client
 
-——— Menyu chiqarish ———
+    await client.connect()
+    if not await client.is_user_authorized():
+        try:
+            await client.send_code_request(phone)
+            await update.message.reply_text("📩 Kod yuborildi, kiriting:")
+            return CODE
+        except Exception as e:
+            await update.message.reply_text(f"❌ Xato: {e}")
+            return ConversationHandler.END
+    await update.message.reply_text("✅ Akkount allaqachon ulangan.")
+    return await after_login(update, context)
 
-async def show_menu(update: Update): keyboard = [[InlineKeyboardButton("Guruh ochish", callback_data='create_group')]] target = update.message or update.callback_query.message await target.reply_text("Rejimni tanlang⚙️", reply_markup=InlineKeyboardMarkup(keyboard)) return SELECT_MODE
-
-——— Rejim tanlash ———
-
-async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE): query = update.callback_query await query.answer() context.user_data['mode'] = query.data keyboard = ReplyKeyboardMarkup( [[KeyboardButton("📱 Telefon raqamni yuborish", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True ) await query.message.reply_text("📞 Telefon raqamingizni yuboring:", reply_markup=keyboard) return PHONE
-
-——— Telefon qabul qilish ———
-
-async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE): phone = update.message.contact.phone_number if update.message.contact else update.message.text.strip() if not phone.startswith('+') or not phone[1:].isdigit(): await update.message.reply_text("Telefon raqam + bilan boshlanishi va raqam bo‘lishi kerak.") return PHONE
-
-context.user_data['phone'] = phone
-client = TelegramClient(f"sessions/{phone}", api_id, api_hash)
-sessions[update.effective_user.id] = client
-
-await client.connect()
-if not await client.is_user_authorized():
+# --- Kod qabul qilish ---
+async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = sessions.get(update.effective_user.id)
+    phone = context.user_data.get('phone')
     try:
-        await client.send_code_request(phone)
-        await update.message.reply_text("📩 Kod yuborildi, kiriting:")
-        return CODE
+        await client.sign_in(phone, update.message.text.strip())
+    except errors.SessionPasswordNeededError:
+        await update.message.reply_text("🔑 2 bosqichli parolni kiriting:")
+        return PASSWORD
     except Exception as e:
         await update.message.reply_text(f"❌ Xato: {e}")
         return ConversationHandler.END
-await update.message.reply_text("✅ Akkount allaqachon ulangan.")
-return await after_login(update, context)
+    return await after_login(update, context)
 
-——— Kod qabul qilish ———
-
-async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE): client = sessions.get(update.effective_user.id) phone = context.user_data.get('phone') try: await client.sign_in(phone, update.message.text.strip()) except errors.SessionPasswordNeededError: await update.message.reply_text("🔑 2 bosqichli parolni kiriting:") return PASSWORD except Exception as e: await update.message.reply_text(f"❌ Xato: {e}") return ConversationHandler.END return await after_login(update, context)
-
-——— 2FA parol ———
-
-async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE): client = sessions.get(update.effective_user.id) try: await client.sign_in(password=update.message.text.strip()) except Exception as e: await update.message.reply_text(f"❌ Xato: {e}") return ConversationHandler.END return await after_login(update, context)
-
-——— Login tugagach ———
-
-async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-50)") return GROUP_RANGE
-
-——— Guruh yaratish jarayoni ———
-
-async def background_group_creator(user_id, client, start, end, phone, context): created_channels = [] message = await context.bot.send_message(user_id, "⏳ Guruh yaratish jarayoni boshlandi...")
-
-for i in range(start, end + 1):
+# --- 2FA parol ---
+async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = sessions.get(update.effective_user.id)
     try:
-        result = await client(CreateChannelRequest(
-            title=f"Guruh #{i}", about="Guruh sotiladi", megagroup=True
-        ))
-        channel = result.chats[0]
-        created_channels.append(channel)
-        try:
-            await client(InviteToChannelRequest(channel, [TARGET_BOT]))
-            status = "✅ yaratildi va bot qo‘shildi"
-        except Exception as e:
-            status = f"⚠ yaratildi, lekin bot qo‘shilmadi: {e}"
+        await client.sign_in(password=update.message.text.strip())
     except Exception as e:
-        status = f"❌ xato: {e}"
+        await update.message.reply_text(f"❌ Xato: {e}")
+        return ConversationHandler.END
+    return await after_login(update, context)
 
-    percent = int(((i - start + 1) / (end - start + 1)) * 100)
-    bar = "█" * (percent // 5) + "░" * (20 - (percent // 5))
-    await message.edit_text(f"⏳ {i}/{end} bajarildi... ({percent}%)\n[{bar}]\nOxirgi: Guruh #{i} - {status}")
-    await asyncio.sleep(3)
+# --- Login tugagach ---
+async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    last_num = progress.get(str(user_id), 0)
+    await update.message.reply_text(f"📊 Nechta guruh yaratilsin? (masalan {last_num+1}-{last_num+5})")
+    return GROUP_RANGE
 
-progress[phone] = {"last_end": end, "auto_enabled": True}
-save_progress(progress)
+# --- Guruh yaratish jarayoni ---
+async def background_group_creator(user_id, client, start, end, mode, context):
+    created_channels = []
+    status_msg = await context.bot.send_message(user_id, "⏳ Guruhlar yaratilmoqda...")
 
-await context.bot.send_message(user_id, f"🏁 {len(created_channels)} ta guruh yaratildi. Yakuniy oraliq: {start}-{end}")
-await client.disconnect()
-sessions.pop(user_id, None)
+    for i in range(start, end + 1):
+        if i > 500:  # limit
+            await context.bot.send_message(user_id, "⛔ 500 ta guruh limitiga yetildi, to‘xtatildi.")
+            break
 
-——— Guruhlar soni qabul qilish ———
+        try:
+            result = await client(CreateChannelRequest(
+                title=f"Guruh #{i}", about="Guruh sotiladi", megagroup=True
+            ))
+            channel = result.chats[0]
+            created_channels.append(channel)
 
-async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE): try: start, end = map(int, update.message.text.strip().split('-')) if start <= 0 or end < start: raise ValueError except ValueError: await update.message.reply_text("❌ Noto‘g‘ri format. Masalan: 1-5") return GROUP_RANGE
+            try:
+                await client(InviteToChannelRequest(channel, [TARGET_BOT]))
+            except Exception:
+                pass
 
-if end >= 500:
-    await update.message.reply_text("🚫 Limitga yetildi (500 guruh).")
+            # Xabarni yangilash
+            await status_msg.edit_text(f"✅ Guruh #{i} yaratildi. ({len(created_channels)} ta)")
+
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Guruh #{i} yaratishda xato: {e}")
+        await asyncio.sleep(3)
+
+    # progress saqlash
+    if created_channels:
+        progress[str(user_id)] = created_channels[-1].title.split("#")[-1]
+        save_progress(progress)
+
+    await status_msg.edit_text(f"🏁 {len(created_channels)} ta guruh yaratildi.")
+    await client.disconnect()
+    sessions.pop(user_id, None)
+
+# --- Guruhlar soni qabul qilish ---
+async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        start, end = map(int, update.message.text.strip().split('-'))
+        if start <= 0 or end < start:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Noto‘g‘ri format. Masalan: 1-5")
+        return GROUP_RANGE
+
+    client = sessions.get(update.effective_user.id)
+    await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
+    asyncio.create_task(background_group_creator(update.effective_user.id, client, start, end, context.user_data.get('mode'), context))
     return ConversationHandler.END
 
-client = sessions.get(update.effective_user.id)
-phone = context.user_data.get('phone')
-asyncio.create_task(background_group_creator(update.effective_user.id, client, start, end, phone, context))
-return ConversationHandler.END
+# --- Bekor qilish ---
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Bekor qilindi.")
+    if (client := sessions.pop(update.effective_user.id, None)):
+        await client.disconnect()
+    return ConversationHandler.END
 
-——— Auto scheduler ———
+# 🌐 WEB SERVER (Render uchun)
+async def handle(_):
+    return web.Response(text="Bot alive!")
 
-async def auto_scheduler(context: ContextTypes.DEFAULT_TYPE): for phone, data in progress.items(): if not data.get("auto_enabled"): continue last_end = data.get("last_end", 0) if last_end >= 500: continue
+async def start_webserver():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"🌐 Web-server {port} portda ishga tushdi.")
+    while True:
+        await asyncio.sleep(3600)
 
-start = last_end + 1
-    end = min(last_end + 50, 500)
+# 🤖 BOTNI ISHGA TUSHIRISH
+async def run_bot():
+    application = Application.builder().token(bot_token).build()
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            ASK_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_password)],
+            SELECT_MODE: [CallbackQueryHandler(mode_chosen)],
+            PHONE: [MessageHandler(filters.TEXT | filters.CONTACT, phone_received)],
+            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_received)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, password_received)],
+            GROUP_RANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, group_range_received)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(conv_handler)
+    logger.info("🤖 Bot ishga tushdi.")
 
-    client = TelegramClient(f"sessions/{phone}", api_id, api_hash)
-    await client.connect()
-    user_id = list(sessions.keys())[0] if sessions else None
-    if user_id:
-        asyncio.create_task(background_group_creator(user_id, client, start, end, phone, context))
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    await asyncio.Event().wait()
 
-——— Bekor qilish ———
+# --- ASOSIY ISHGA TUSHIRISH ---
+async def main():
+    await asyncio.gather(
+        start_webserver(),
+        run_bot()
+    )
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("❌ Bekor qilindi.") if (client := sessions.pop(update.effective_user.id, None)): await client.disconnect() return ConversationHandler.END
-
-🌐 WEB SERVER (Render uchun)
-
-async def handle(_): return web.Response(text="Bot alive!")
-
-async def start_webserver(): app = web.Application() app.router.add_get("/", handle) runner = web.AppRunner(app) await runner.setup() port = int(os.environ.get("PORT", 8080)) site = web.TCPSite(runner, "0.0.0.0", port) await site.start() logger.info(f"🌐 Web-server {port} portda ishga tushdi.") while True: await asyncio.sleep(3600)
-
-🤖 BOTNI ISHGA TUSHIRISH — yangi event loop ochmasdan
-
-async def run_bot(): application = Application.builder().token(bot_token).build() conv_handler = ConversationHandler( entry_points=[CommandHandler("start", start)], states={ ASK_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_password)], SELECT_MODE: [CallbackQueryHandler(mode_chosen)], PHONE: [MessageHandler(filters.TEXT | filters.CONTACT, phone_received)], CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_received)], PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, password_received)], GROUP_RANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, group_range_received)], }, fallbacks=[CommandHandler("cancel", cancel)] ) application.add_handler(conv_handler)
-
-# Auto job (5 min test uchun)
-application.job_queue.run_repeating(auto_scheduler, interval=300, first=300)
-
-logger.info("🤖 Bot ishga tushdi.")
-await application.initialize()
-await application.start()
-await application.updater.start_polling()
-await asyncio.Event().wait()
-
-ASOSIY ISHGA TUSHIRISH
-
-async def main(): await asyncio.gather( start_webserver(), run_bot() )
-
-if name == "main": asyncio.run(main())
-
+if __name__ == "__main__":
+    asyncio.run(main())
