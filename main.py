@@ -5,12 +5,20 @@ from pathlib import Path
 from aiohttp import web
 
 from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup, Update,
-    ReplyKeyboardMarkup, KeyboardButton
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
 )
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler,
-    ConversationHandler, MessageHandler, filters, ContextTypes
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
 )
 from telethon import TelegramClient, errors
 from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
@@ -21,7 +29,10 @@ Path("sessions").mkdir(exist_ok=True)
 # ——— TELEGRAM API ma’lumotlari ———
 api_id = 25351311
 api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
-bot_token = os.environ.get("BOT_TOKEN", "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk")
+bot_token = os.environ.get(
+    "BOT_TOKEN",  # 🔑 Render ENV’dan olish
+    "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk",
+)
 
 # 🔑 Kirish paroli
 ACCESS_PASSWORD = "dnx"
@@ -44,13 +55,13 @@ authorized_users = set()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in authorized_users:
         return await show_menu(update)
-    await update.effective_message.reply_text("🔒 Kirish parolini kiriting:")
+    await update.message.reply_text("🔒 Kirish parolini kiriting:")
     return ASK_PASSWORD
 
 # ——— Parol tekshirish ———
 async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text.strip() != ACCESS_PASSWORD:
-        await update.effective_message.reply_text("❌ Noto‘g‘ri parol.")
+        await update.message.reply_text("❌ Noto‘g‘ri parol.")
         return ConversationHandler.END
     authorized_users.add(update.effective_user.id)
     return await show_menu(update)
@@ -61,10 +72,8 @@ async def show_menu(update: Update):
         InlineKeyboardButton("Guruh ochish", callback_data='create_group'),
         InlineKeyboardButton("Guruhni topshirish", callback_data='transfer_group')
     ]]
-    await update.effective_message.reply_text(
-        "Rejimni tanlang⚙️",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    target = update.message or update.callback_query.message
+    await target.reply_text("Rejimni tanlang⚙️", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_MODE
 
 # ——— Rejim tanlash ———
@@ -83,7 +92,7 @@ async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number if update.message.contact else update.message.text.strip()
     if not phone.startswith('+') or not phone[1:].isdigit():
-        await update.effective_message.reply_text("Telefon raqam + bilan boshlanishi va raqam bo‘lishi kerak.")
+        await update.message.reply_text("Telefon raqam + bilan boshlanishi va raqam bo‘lishi kerak.")
         return PHONE
 
     context.user_data['phone'] = phone
@@ -94,12 +103,12 @@ async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await client.is_user_authorized():
         try:
             await client.send_code_request(phone)
-            await update.effective_message.reply_text("📩 Kod yuborildi, kiriting:")
+            await update.message.reply_text("📩 Kod yuborildi, kiriting:")
             return CODE
         except Exception as e:
-            await update.effective_message.reply_text(f"❌ Xato: {e}")
+            await update.message.reply_text(f"❌ Xato: {e}")
             return ConversationHandler.END
-    await update.effective_message.reply_text("✅ Akkount allaqachon ulangan.")
+    await update.message.reply_text("✅ Akkount allaqachon ulangan.")
     return await after_login(update, context)
 
 # ——— Kod qabul qilish ———
@@ -109,10 +118,10 @@ async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await client.sign_in(phone, update.message.text.strip())
     except errors.SessionPasswordNeededError:
-        await update.effective_message.reply_text("🔑 2 bosqichli parolni kiriting:")
+        await update.message.reply_text("🔑 2 bosqichli parolni kiriting:")
         return PASSWORD
     except Exception as e:
-        await update.effective_message.reply_text(f"❌ Xato: {e}")
+        await update.message.reply_text(f"❌ Xato: {e}")
         return ConversationHandler.END
     return await after_login(update, context)
 
@@ -122,53 +131,28 @@ async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await client.sign_in(password=update.message.text.strip())
     except Exception as e:
-        await update.effective_message.reply_text(f"❌ Xato: {e}")
+        await update.message.reply_text(f"❌ Xato: {e}")
         return ConversationHandler.END
     return await after_login(update, context)
 
 # ——— Login tugagach ———
 async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-5)")
+    await update.message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-5)")
     return GROUP_RANGE
 
-# ——— Guruhlar soni qabul qilish (progress bilan) ———
-async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        start, end = map(int, update.message.text.strip().split('-'))
-        if start <= 0 or end < start:
-            raise ValueError
-    except ValueError:
-        await update.effective_message.reply_text("❌ Noto‘g‘ri format. Masalan: 1-5")
-        return GROUP_RANGE
-
-    client = sessions.get(update.effective_user.id)
-    phone = context.user_data.get("phone")
+# ——— Guruh yaratish jarayoni (progress bilan) ———
+async def background_group_creator(user_id, client, start, end, mode, context, phone):
     total = end - start + 1
-
-    # Progress xabarini yuboramiz
-    progress_msg = await update.effective_message.reply_text(
-        f"📢 ({phone}) uchun guruh ochish boshlandi\n"
-        f"Jami: {total} ta guruh\n"
-        f"Ochilgan: 0/{total}, Xatolik: 0"
-    )
-
-    # Orqa fon vazifasi
-    asyncio.create_task(background_group_creator(
-        user_id=update.effective_user.id,
-        client=client,
-        start=start, end=end,
-        mode=context.user_data.get('mode'),
-        context=context,
-        progress_msg=progress_msg,
-        total=total,
-        phone=phone
-    ))
-    return ConversationHandler.END
-
-# ——— Guruh yaratish jarayoni (progress update bilan) ———
-async def background_group_creator(user_id, client, start, end, mode, context, progress_msg, total, phone):
     created = 0
     failed = 0
+
+    # Boshlang‘ich xabar
+    progress_message = await context.bot.send_message(
+        user_id,
+        f"📱 Raqam: {phone}\n"
+        f"📊 Guruh yaratish boshlandi: 0/{total}\n"
+        f"❌ Xatoliklar: 0"
+    )
 
     for i in range(start, end + 1):
         try:
@@ -176,54 +160,65 @@ async def background_group_creator(user_id, client, start, end, mode, context, p
                 title=f"Guruh #{i}", about="Guruh sotiladi", megagroup=True
             ))
             channel = result.chats[0]
-
             try:
                 await client(InviteToChannelRequest(channel, [TARGET_BOT]))
-            except Exception:
-                pass  # bot qo‘shilmasa ham davom etadi
-
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Botni qo‘shib bo‘lmadi: {e}")
             created += 1
-
-        except Exception:
+        except Exception as e:
             failed += 1
+            logger.error(f"Guruh #{i} xato: {e}")
 
-        # Progressni yangilash
+        # Progress yangilash
         try:
-            await context.bot.edit_message_text(
-                chat_id=user_id,
-                message_id=progress_msg.message_id,
-                text=(
-                    f"📢 ({phone}) uchun guruh ochish\n"
-                    f"Jami: {total} ta guruh\n"
-                    f"Ochilgan: {created}/{total}, Xatolik: {failed}"
-                )
+            await progress_message.edit_text(
+                f"📱 Raqam: {phone}\n"
+                f"📊 Guruh yaratildi: {created}/{total}\n"
+                f"❌ Xatoliklar: {failed}"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Progress edit xatolik: {e}")
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
 
-    # Yakuniy natija
-    await context.bot.edit_message_text(
-        chat_id=user_id,
-        message_id=progress_msg.message_id,
-        text=(
-            f"✅ ({phone}) uchun guruh yaratish tugadi!\n"
-            f"Ochilgan: {created}, Xatolik: {failed}, Jami: {total}"
-        )
+    # Yakuniy xabar
+    await progress_message.edit_text(
+        f"🏁 Jarayon tugadi!\n\n"
+        f"📱 Raqam: {phone}\n"
+        f"✅ Yaratilgan guruhlar: {created}/{total}\n"
+        f"❌ Xatoliklar: {failed}"
     )
 
     await client.disconnect()
     sessions.pop(user_id, None)
 
+# ——— Guruhlar soni qabul qilish ———
+async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        start, end = map(int, update.message.text.strip().split('-'))
+        if start <= 0 or end < start:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Noto‘g‘ri format. Masalan: 1-5")
+        return GROUP_RANGE
+
+    client = sessions.get(update.effective_user.id)
+    phone = context.user_data.get('phone')
+    await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
+    asyncio.create_task(background_group_creator(
+        update.effective_user.id, client, start, end, context.user_data.get('mode'), context, phone
+    ))
+    return ConversationHandler.END
+
 # ——— Bekor qilish ———
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("❌ Bekor qilindi.")
+    await update.message.reply_text("❌ Bekor qilindi.")
     if (client := sessions.pop(update.effective_user.id, None)):
         await client.disconnect()
     return ConversationHandler.END
 
-# 🌐 WEB SERVER
+# 🌐 WEB SERVER (Render uchun)
 async def handle(_):
     return web.Response(text="Bot alive!")
 
@@ -239,7 +234,7 @@ async def start_webserver():
     while True:
         await asyncio.sleep(3600)
 
-# 🤖 BOT
+# 🤖 BOTNI ISHGA TUSHIRISH
 async def run_bot():
     application = Application.builder().token(bot_token).build()
     conv_handler = ConversationHandler(
@@ -255,11 +250,11 @@ async def run_bot():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(conv_handler)
-
     logger.info("🤖 Bot ishga tushdi.")
+
     await application.run_polling()
 
-# ASOSIY
+# ASOSIY ISHGA TUSHIRISH
 async def main():
     await asyncio.gather(
         start_webserver(),
