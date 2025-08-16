@@ -1,8 +1,13 @@
 import logging
 import asyncio
 import os
+import sys
 from pathlib import Path
 from aiohttp import web
+
+# 🔧 Python 3.13 uchun imghdr patch
+import imghdr2 as imghdr
+sys.modules["imghdr"] = imghdr
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
@@ -145,7 +150,6 @@ async def background_group_creator(user_id, client, start, end, mode, context):
         except Exception:
             failed += 1
 
-        # har safar xabarni yangilab turamiz
         try:
             await status_msg.edit_text(
                 f"⏳ Jarayon: {i}/{end-start+1}\n"
@@ -183,7 +187,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await client.disconnect()
     return ConversationHandler.END
 
-# 🌐 WEB SERVER (Render uchun)
+# 🌐 WEB SERVER
 async def handle(_):
     return web.Response(text="Bot alive!")
 
@@ -200,7 +204,7 @@ async def start_webserver():
         await asyncio.sleep(3600)
 
 # 🤖 BOTNI ISHGA TUSHIRISH
-def run_bot():
+async def run_bot():
     application = Application.builder().token(bot_token).build()
 
     conv_handler = ConversationHandler(
@@ -218,14 +222,14 @@ def run_bot():
     application.add_handler(conv_handler)
 
     logger.info("🤖 Bot ishga tushdi.")
-    application.run_polling()  # ❌ oldin `await` bilan edi → endi oddiy chaqiriladi
+    await application.run_polling()
 
 # ASOSIY ISHGA TUSHIRISH
 async def main():
-    # webserverni fon vazifasida ishga tushuramiz
-    asyncio.create_task(start_webserver())
-    # botni ishga tushiramiz (blocking)
-    run_bot()
+    await asyncio.gather(
+        start_webserver(),
+        run_bot()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
