@@ -18,7 +18,7 @@ Path("sessions").mkdir(exist_ok=True)
 # ——— TELEGRAM API ma’lumotlari ———
 api_id = 25351311
 api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
-bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"  # Render ENV bo‘lsa os.environ.get() qilsa ham bo‘ladi
+bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"
 
 # 🔑 Kirish paroli
 ACCESS_PASSWORD = "dnx"
@@ -200,7 +200,7 @@ async def start_webserver():
         await asyncio.sleep(3600)
 
 # 🤖 BOTNI ISHGA TUSHIRISH
-async def run_bot():
+def run_bot():
     application = Application.builder().token(bot_token).build()
 
     conv_handler = ConversationHandler(
@@ -218,14 +218,14 @@ async def run_bot():
     application.add_handler(conv_handler)
 
     logger.info("🤖 Bot ishga tushdi.")
-    await application.run_polling()
+    application.run_polling()  # ❌ oldin `await` bilan edi → endi oddiy chaqiriladi
 
 # ASOSIY ISHGA TUSHIRISH
 async def main():
-    await asyncio.gather(
-        start_webserver(),
-        run_bot()
-    )
+    # webserverni fon vazifasida ishga tushuramiz
+    asyncio.create_task(start_webserver())
+    # botni ishga tushiramiz (blocking)
+    run_bot()
 
 if __name__ == "__main__":
     asyncio.run(main())
