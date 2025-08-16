@@ -21,7 +21,7 @@ Path("sessions").mkdir(exist_ok=True)
 # ——— TELEGRAM API ma’lumotlari ———
 api_id = 25351311
 api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
-bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"
+bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"  # ⚠️ o'z tokeningizni qo'ying
 
 # 🔑 Kirish paroli
 ACCESS_PASSWORD = "dnx"
@@ -88,15 +88,17 @@ async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = TelegramClient(f"sessions/{phone}", api_id, api_hash)
     sessions[update.effective_user.id] = client
 
-    await client.connect()
+    await client.start(phone=lambda: phone)
     if not await client.is_user_authorized():
         try:
             await client.send_code_request(phone)
             await update.message.reply_text("📩 Kod yuborildi, kiriting:")
             return CODE
         except Exception as e:
+            logger.exception(e)
             await update.message.reply_text(f"❌ Xato: {e}")
             return ConversationHandler.END
+
     await update.message.reply_text("✅ Akkount allaqachon ulangan.")
     return await after_login(update, context)
 
@@ -110,6 +112,7 @@ async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔑 2 bosqichli parolni kiriting:")
         return PASSWORD
     except Exception as e:
+        logger.exception(e)
         await update.message.reply_text(f"❌ Xato: {e}")
         return ConversationHandler.END
     return await after_login(update, context)
@@ -120,6 +123,7 @@ async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await client.sign_in(password=update.message.text.strip())
     except Exception as e:
+        logger.exception(e)
         await update.message.reply_text(f"❌ Xato: {e}")
         return ConversationHandler.END
     return await after_login(update, context)
@@ -148,7 +152,6 @@ async def background_group_creator(user_id, client, start, end, mode, context):
         except Exception:
             failed += 1
 
-        # har safar xabarni yangilab turamiz
         try:
             await status_msg.edit_text(
                 f"⏳ Jarayon: {i}/{end-start+1}\n"
@@ -202,11 +205,9 @@ async def start_webserver():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logger.info(f"🌐 Web-server {port} portda ishga tushdi.")
-    while True:
-        await asyncio.sleep(3600)
 
 # 🤖 BOTNI ISHGA TUSHIRISH
-async def run_bot():
+async def main():
     application = Application.builder().token(bot_token).build()
 
     conv_handler = ConversationHandler(
@@ -223,15 +224,11 @@ async def run_bot():
     )
     application.add_handler(conv_handler)
 
+    # web serverni parallel ishlatamiz
+    asyncio.create_task(start_webserver())
+
     logger.info("🤖 Bot ishga tushdi.")
     await application.run_polling()
-
-# ASOSIY ISHGA TUSHIRISH
-async def main():
-    await asyncio.gather(
-        start_webserver(),
-        run_bot()
-    )
 
 if __name__ == "__main__":
     asyncio.run(main())
