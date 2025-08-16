@@ -15,7 +15,7 @@ Path("sessions").mkdir(exist_ok=True)
 # ——— TELEGRAM API ma’lumotlari ———
 api_id = 25351311
 api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
-bot_token = os.environ.get("BOT_TOKEN", "7352312639:AAEwQHVq5Uwhmnkc3ITk5vPLhVrRxCOWTcs")
+bot_token = os.environ.get("BOT_TOKEN", "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk")
 
 # 🔑 Kirish paroli
 ACCESS_PASSWORD = "dnx"
@@ -467,4 +467,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
