@@ -1,15 +1,13 @@
 import logging
 import asyncio
 import os
-import sys
 from pathlib import Path
 from aiohttp import web
 
-# 🔧 Python 3.13 uchun imghdr patch
-import imghdr2 as imghdr
-sys.modules["imghdr"] = imghdr
-
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup, Update,
+    ReplyKeyboardMarkup, KeyboardButton
+)
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     ConversationHandler, MessageHandler, filters, ContextTypes
@@ -150,6 +148,7 @@ async def background_group_creator(user_id, client, start, end, mode, context):
         except Exception:
             failed += 1
 
+        # har safar xabarni yangilab turamiz
         try:
             await status_msg.edit_text(
                 f"⏳ Jarayon: {i}/{end-start+1}\n"
@@ -177,7 +176,10 @@ async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYP
 
     client = sessions.get(update.effective_user.id)
     await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
-    asyncio.create_task(background_group_creator(update.effective_user.id, client, start, end, context.user_data.get('mode'), context))
+    asyncio.create_task(background_group_creator(
+        update.effective_user.id, client, start, end,
+        context.user_data.get('mode'), context
+    ))
     return ConversationHandler.END
 
 # ——— Bekor qilish ———
@@ -187,7 +189,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await client.disconnect()
     return ConversationHandler.END
 
-# 🌐 WEB SERVER
+# 🌐 WEB SERVER (Render uchun)
 async def handle(_):
     return web.Response(text="Bot alive!")
 
