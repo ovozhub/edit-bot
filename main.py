@@ -76,44 +76,39 @@ async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 ——— Login tugagach ———
 
-async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-5)") return GROUP_RANGE
+async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-50)") return GROUP_RANGE
 
 ——— Guruh yaratish jarayoni (progress bar bilan) ———
 
-async def background_group_creator(user_id, client, start, end, mode, context, message_id): total = end - start + 1 created = 0
+async def background_group_creator(user_id, client, start, end, mode, context): created_channels = []
 
-for i in range(start, end + 1):
+progress_msg = await context.bot.send_message(user_id, f"⏳ {start}-{end} gacha guruhlar yaratilmoqda...")
+
+total = end - start + 1
+for i, num in enumerate(range(start, end + 1), start=1):
     try:
         result = await client(CreateChannelRequest(
-            title=f"Guruh #{i}", about="Guruh sotiladi", megagroup=True
+            title=f"Guruh #{num}", about="Guruh sotiladi", megagroup=True
         ))
         channel = result.chats[0]
+        created_channels.append(channel)
         try:
             await client(InviteToChannelRequest(channel, [TARGET_BOT]))
-        except:
+        except Exception:
             pass
-        created += 1
+    except Exception:
+        pass
 
-        percent = int((created / total) * 100)
-        bar_length = 10
-        filled = int(bar_length * percent / 100)
-        bar = "█" * filled + "░" * (bar_length - filled)
+    # progress bar yangilash
+    percent = int((i / total) * 100)
+    bar_len = 20
+    filled = int(bar_len * percent / 100)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    await progress_msg.edit_text(f"⏳ {start}-{end} gacha guruhlar yaratilmoqda...\n\n{bar} {percent}%")
 
-        await context.bot.edit_message_text(
-            chat_id=user_id,
-            message_id=message_id,
-            text=f"⏳ Guruh yaratish: {created}/{total}\n{bar} {percent}%"
-        )
+    await asyncio.sleep(2)
 
-    except Exception as e:
-        await context.bot.send_message(user_id, f"❌ Guruh #{i} yaratishda xato: {e}")
-    await asyncio.sleep(3)
-
-await context.bot.edit_message_text(
-    chat_id=user_id,
-    message_id=message_id,
-    text=f"🏁 {created} ta guruh yaratildi! ✅"
-)
+await progress_msg.edit_text(f"🏁 {len(created_channels)} ta guruh yaratildi ({start}-{end}).")
 await client.disconnect()
 sessions.pop(user_id, None)
 
@@ -122,8 +117,8 @@ sessions.pop(user_id, None)
 async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE): try: start, end = map(int, update.message.text.strip().split('-')) if start <= 0 or end < start: raise ValueError except ValueError: await update.message.reply_text("❌ Noto‘g‘ri format. Masalan: 1-5") return GROUP_RANGE
 
 client = sessions.get(update.effective_user.id)
-msg = await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
-asyncio.create_task(background_group_creator(update.effective_user.id, client, start, end, context.user_data.get('mode'), context, msg.message_id))
+await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
+asyncio.create_task(background_group_creator(update.effective_user.id, client, start, end, context.user_data.get('mode'), context))
 return ConversationHandler.END
 
 ——— Bekor qilish ———
