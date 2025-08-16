@@ -166,7 +166,7 @@ async def auto_group_task(user_id, client, phone, context):
         await context.bot.send_message(user_id, f"✅ {end_index} tagacha guruh yaratildi.")
 
         # 5 minut kutadi (test uchun)
-        await asyncio.sleep(300)
+        await asyncio.sleep(86400)
 
     await client.disconnect()
     sessions.pop(user_id, None)
@@ -231,3 +231,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
