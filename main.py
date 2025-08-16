@@ -5,20 +5,12 @@ from pathlib import Path
 from aiohttp import web
 
 from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
+    InlineKeyboardButton, InlineKeyboardMarkup, Update,
+    ReplyKeyboardMarkup, KeyboardButton
 )
 from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
+    Application, CommandHandler, CallbackQueryHandler,
+    ConversationHandler, MessageHandler, filters, ContextTypes
 )
 from telethon import TelegramClient, errors
 from telethon.tl.functions.channels import CreateChannelRequest, InviteToChannelRequest
@@ -30,9 +22,9 @@ Path("sessions").mkdir(exist_ok=True)
 api_id = 25351311
 api_hash = "7b854af9996797aa9ca67b42f1cd5cbe"
 bot_token = os.environ.get(
-    "BOT_TOKEN",  # 🔑 Render ENV’dan olish
-    "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk",
-)
+    "BOT_TOKEN",
+    "8350150569:AAEfax1UQn1AnpWrDdwFo0c7zCzDklkcbJk"
+)  # Render ENV'dan olish
 
 # 🔑 Kirish paroli
 ACCESS_PASSWORD = "dnx"
@@ -51,12 +43,14 @@ ASK_PASSWORD, SELECT_MODE, PHONE, CODE, PASSWORD, GROUP_RANGE = range(6)
 sessions = {}
 authorized_users = set()
 
+
 # ——— START ———
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in authorized_users:
         return await show_menu(update)
     await update.message.reply_text("🔒 Kirish parolini kiriting:")
     return ASK_PASSWORD
+
 
 # ——— Parol tekshirish ———
 async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -65,6 +59,7 @@ async def ask_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     authorized_users.add(update.effective_user.id)
     return await show_menu(update)
+
 
 # ——— Menyu chiqarish ———
 async def show_menu(update: Update):
@@ -75,6 +70,7 @@ async def show_menu(update: Update):
     target = update.message or update.callback_query.message
     await target.reply_text("Rejimni tanlang⚙️", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_MODE
+
 
 # ——— Rejim tanlash ———
 async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,6 +83,7 @@ async def mode_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.message.reply_text("📞 Telefon raqamingizni yuboring:", reply_markup=keyboard)
     return PHONE
+
 
 # ——— Telefon qabul qilish ———
 async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,6 +108,7 @@ async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Akkount allaqachon ulangan.")
     return await after_login(update, context)
 
+
 # ——— Kod qabul qilish ———
 async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = sessions.get(update.effective_user.id)
@@ -125,6 +123,7 @@ async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     return await after_login(update, context)
 
+
 # ——— 2FA parol ———
 async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = sessions.get(update.effective_user.id)
@@ -135,25 +134,25 @@ async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     return await after_login(update, context)
 
+
 # ——— Login tugagach ———
 async def after_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📊 Nechta guruh yaratilsin? (masalan 1-5)")
     return GROUP_RANGE
 
-# ——— Guruh yaratish jarayoni (progress bilan) ———
-async def background_group_creator(user_id, client, start, end, mode, context, phone):
-    total = end - start + 1
-    created = 0
-    failed = 0
 
-    # Boshlang‘ich xabar
+# ——— Guruh yaratish jarayoni ———
+async def background_group_creator(user_id, client, start, end, mode, context, phone):
+    created_channels = 0
+    failed_channels = 0
+
+    # Progress xabarini yuboramiz
     progress_message = await context.bot.send_message(
-        user_id,
-        f"📱 Raqam: {phone}\n"
-        f"📊 Guruh yaratish boshlandi: 0/{total}\n"
-        f"❌ Xatoliklar: 0"
+        chat_id=user_id,
+        text=f"📱 {phone}\n⏳ Guruh yaratish jarayoni boshlandi...\n0/{end - start + 1} ✅\n0 ❌"
     )
 
+    total = end - start + 1
     for i in range(start, end + 1):
         try:
             result = await client(CreateChannelRequest(
@@ -162,36 +161,28 @@ async def background_group_creator(user_id, client, start, end, mode, context, p
             channel = result.chats[0]
             try:
                 await client(InviteToChannelRequest(channel, [TARGET_BOT]))
+                created_channels += 1
             except Exception as e:
-                failed += 1
-                logger.warning(f"Botni qo‘shib bo‘lmadi: {e}")
-            created += 1
+                failed_channels += 1
         except Exception as e:
-            failed += 1
-            logger.error(f"Guruh #{i} xato: {e}")
+            failed_channels += 1
 
-        # Progress yangilash
-        try:
-            await progress_message.edit_text(
-                f"📱 Raqam: {phone}\n"
-                f"📊 Guruh yaratildi: {created}/{total}\n"
-                f"❌ Xatoliklar: {failed}"
-            )
-        except Exception as e:
-            logger.warning(f"Progress edit xatolik: {e}")
-
+        # Progressni yangilash
+        await progress_message.edit_text(
+            f"📱 {phone}\n⏳ Jarayon: {created_channels + failed_channels}/{total}\n"
+            f"✅ {created_channels}\n❌ {failed_channels}"
+        )
         await asyncio.sleep(3)
 
-    # Yakuniy xabar
+    # Yakuniy natija
     await progress_message.edit_text(
-        f"🏁 Jarayon tugadi!\n\n"
-        f"📱 Raqam: {phone}\n"
-        f"✅ Yaratilgan guruhlar: {created}/{total}\n"
-        f"❌ Xatoliklar: {failed}"
+        f"📱 {phone}\n🏁 Yakunlandi!\n"
+        f"✅ {created_channels} ta guruh yaratildi\n❌ {failed_channels} ta xato"
     )
 
     await client.disconnect()
     sessions.pop(user_id, None)
+
 
 # ——— Guruhlar soni qabul qilish ———
 async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,12 +195,14 @@ async def group_range_received(update: Update, context: ContextTypes.DEFAULT_TYP
         return GROUP_RANGE
 
     client = sessions.get(update.effective_user.id)
-    phone = context.user_data.get('phone')
+    phone = context.user_data.get("phone")
     await update.message.reply_text("⏳ Guruh yaratish jarayoni boshlandi...")
-    asyncio.create_task(background_group_creator(
-        update.effective_user.id, client, start, end, context.user_data.get('mode'), context, phone
-    ))
+    asyncio.create_task(
+        background_group_creator(update.effective_user.id, client, start, end,
+                                 context.user_data.get('mode'), context, phone)
+    )
     return ConversationHandler.END
+
 
 # ——— Bekor qilish ———
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -218,9 +211,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await client.disconnect()
     return ConversationHandler.END
 
+
 # 🌐 WEB SERVER (Render uchun)
 async def handle(_):
     return web.Response(text="Bot alive!")
+
 
 async def start_webserver():
     app = web.Application()
@@ -233,6 +228,7 @@ async def start_webserver():
     logger.info(f"🌐 Web-server {port} portda ishga tushdi.")
     while True:
         await asyncio.sleep(3600)
+
 
 # 🤖 BOTNI ISHGA TUSHIRISH
 async def run_bot():
@@ -252,7 +248,8 @@ async def run_bot():
     application.add_handler(conv_handler)
     logger.info("🤖 Bot ishga tushdi.")
 
-    await application.run_polling()
+    await application.run_polling()  # ✅ Endi Updater ishlatilmaydi
+
 
 # ASOSIY ISHGA TUSHIRISH
 async def main():
@@ -260,6 +257,7 @@ async def main():
         start_webserver(),
         run_bot()
     )
+
 
 if __name__ == "__main__":
     asyncio.run(main())
