@@ -29,7 +29,7 @@ MAX_GROUPS = 500
 
 # Logger
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 # Holatlar
 ASK_PASSWORD, SELECT_MODE, PHONE, CODE, PASSWORD, GROUP_RANGE = range(6)
@@ -177,18 +177,23 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Auto guruh task ---
 async def auto_group_task(context):
     while True:
-        await asyncio.sleep(300)  # 5 daqiqa (test uchun). Keyinchalik 86400 = 24 soat qilamiz
-        with open(progress_file, "r") as f:
-            data = json.load(f)
-        for user_id_str, last_end in data.items():
-            user_id = int(user_id_str)
+        await asyncio.sleep(300)  # 5 daqiqa test uchun
+        for session_file in Path("sessions").glob("*.session*"):
+            phone = session_file.stem
+            user_id = None
+            with open(progress_file, "r") as f:
+                data = json.load(f)
+                for k in data:
+                    user_id = int(k)
+            if user_id is None:
+                continue
+
+            client = TelegramClient(f"sessions/{phone}", api_id, api_hash)
+            await client.connect()
+            last_end = data.get(str(user_id), 0)
             next_start = last_end + 1
             next_end = next_start + 49
             if next_start > MAX_GROUPS:
-                continue
-            client = sessions.get(user_id)
-            if not client:
-                phone = None  # Buni shart bilan aniqlash yoki foydalanuvchiga eslatish
                 continue
             asyncio.create_task(create_groups(user_id, client, next_start, next_end, context))
 
@@ -197,8 +202,7 @@ async def handle(_):
     return web.Response(text="Bot alive!")
 
 async def start_webserver():
-
-app = web.Application()
+    app = web.Application()
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -226,22 +230,19 @@ async def run_bot():
     )
     application.add_handler(conv_handler)
     logger.info("🤖 Bot ishga tushdi.")
-
-    # Auto guruh task ishga tushadi
-    asyncio.create_task(auto_group_task(application))
-
+    # Auto group task
+    application.job_queue.run_repeating(auto_group_task, interval=300, first=5)
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
     await asyncio.Event().wait()
 
-# --- Asosiy ---
+# --- Asosiy ishga tushirish ---
 async def main():
     await asyncio.gather(
         start_webserver(),
         run_bot()
     )
 
-if name == "main":
+if __name__ == "__main__":
     asyncio.run(main())
-
