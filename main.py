@@ -102,7 +102,6 @@ async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     return await after_login(update, context)
 
-ANONIM, [17.08.2025 12:14]
 async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = sessions.get(update.effective_user.id)
     try:
@@ -199,7 +198,6 @@ async def handle(_):
 
 async def start_webserver():
 
-ANONIM, [17.08.2025 12:14]
 app = web.Application()
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
@@ -246,3 +244,4 @@ async def main():
 
 if name == "main":
     asyncio.run(main())
+
